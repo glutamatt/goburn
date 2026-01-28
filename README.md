@@ -2,6 +2,8 @@
 
 A CPU burn testing tool with real-time hardware monitoring for Linux systems.
 
+![goburn TUI screenshot](assets/screenshot.png)
+
 ## Features
 
 - **CPU Burn Testing**: Spawns configurable worker goroutines performing intensive floating-point operations

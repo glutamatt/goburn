@@ -169,69 +169,171 @@ func (m Model) View() string {
 	graphs := m.renderGraphs()
 	help := m.renderHelp()
 
-	// Combine all components
-	return lipgloss.JoinVertical(lipgloss.Left,
+	// Combine all components with minimal spacing
+	content := lipgloss.JoinVertical(lipgloss.Left,
 		header,
+		"\n",
 		stats,
 		"\n",
 		graphs,
+		"\n",
 		help,
 	)
+
+	return content
 }
 
 // renderHeader creates the title bar.
 func (m Model) renderHeader(elapsed time.Duration) string {
-	style := lipgloss.NewStyle().
+	titleStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#00ff00")).
+		Foreground(lipgloss.Color("#FF6B35")).
+		Background(lipgloss.Color("#1a1a1a")).
 		Padding(0, 1)
 
-	return style.Render(fmt.Sprintf("🔥 GOBURN [%s/%s] Workers: %d",
-		elapsed, m.duration.Round(time.Second), m.workerPool.GetActiveCount()))
+	// Progress bar
+	progress := float64(elapsed) / float64(m.duration)
+	progressBar := m.renderProgressBar(progress)
+
+	title := titleStyle.Render(fmt.Sprintf("🔥 GOBURN"))
+
+	timeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#7EC8E3")).
+		Background(lipgloss.Color("#1a1a1a")).
+		Padding(0, 2)
+
+	workerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#98D8C8")).
+		Background(lipgloss.Color("#1a1a1a")).
+		Padding(0, 2)
+
+	timeInfo := timeStyle.Render(fmt.Sprintf("⏱  %s / %s", elapsed, m.duration.Round(time.Second)))
+	workerInfo := workerStyle.Render(fmt.Sprintf("⚙  %d workers", m.workerPool.GetActiveCount()))
+
+	topLine := lipgloss.JoinHorizontal(lipgloss.Center, title, timeInfo, workerInfo)
+
+	headerStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#FF6B35")).
+		Padding(0, 1)
+
+	return headerStyle.Render(lipgloss.JoinVertical(lipgloss.Left, topLine, progressBar))
+}
+
+// renderProgressBar creates a gradient progress bar.
+func (m Model) renderProgressBar(progress float64) string {
+	if progress > 1.0 {
+		progress = 1.0
+	}
+
+	barWidth := 60
+	if m.width > 80 {
+		barWidth = m.width - 30
+	}
+
+	filled := int(float64(barWidth) * progress)
+	empty := barWidth - filled
+
+	filledStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF87"))
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#444444"))
+
+	bar := filledStyle.Render(strings.Repeat("█", filled)) +
+		  emptyStyle.Render(strings.Repeat("░", empty))
+
+	percentStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Bold(true)
+
+	return bar + " " + percentStyle.Render(fmt.Sprintf("%.0f%%", progress*100))
 }
 
 // renderStats creates the current statistics line.
 func (m Model) renderStats() string {
+	// Create stat cards with color-coded values
+	opsCard := m.createStatCard("⚡", "Operations", fmt.Sprintf("%d M/s", m.currentOps), "#FFD700")
+
+	var cpuCard, tempCard, fanCard string
+
+	if m.currentStats.CPUFreqMax > 0 {
+		cpuColor := getPercentageColor(m.currentStats.CPUFreqPct)
+		cpuCard = m.createStatCard("🖥", "CPU Freq", fmt.Sprintf("%d MHz", m.currentStats.CPUFreqCur), cpuColor)
+	}
+
+	if m.currentStats.Temperature > 0 {
+		tempColor := getTempColor(m.currentStats.Temperature)
+		tempCard = m.createStatCard("🌡", "Temp", fmt.Sprintf("%.1f°C", m.currentStats.Temperature), tempColor)
+	}
+
+	if len(m.currentStats.FanRPMs) > 0 {
+		avgRPM := 0
+		for _, rpm := range m.currentStats.FanRPMs {
+			avgRPM += rpm
+		}
+		avgRPM /= len(m.currentStats.FanRPMs)
+		fanCard = m.createStatCard("🌀", "Fan Avg", fmt.Sprintf("%d RPM", avgRPM), "#00CED1")
+	}
+
+	cards := []string{opsCard}
+	if cpuCard != "" {
+		cards = append(cards, cpuCard)
+	}
+	if tempCard != "" {
+		cards = append(cards, tempCard)
+	}
+	if fanCard != "" {
+		cards = append(cards, fanCard)
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, cards...)
+}
+
+// createStatCard creates a styled stat card.
+func (m Model) createStatCard(icon, label, value, color string) string {
+	cardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(color)).
+		Padding(0, 1).
+		Margin(0, 0, 0, 1)
+
+	iconStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(color)).
+		Bold(true)
+
 	labelStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("#ffffff"))
+		Foreground(lipgloss.Color("#888888"))
 
 	valueStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#00ffff"))
+		Foreground(lipgloss.Color(color)).
+		Bold(true)
 
-	var s strings.Builder
+	content := fmt.Sprintf("%s %s\n%s",
+		iconStyle.Render(icon),
+		labelStyle.Render(label),
+		valueStyle.Render(value))
 
-	// Operations
-	s.WriteString(labelStyle.Render("Ops: "))
-	s.WriteString(valueStyle.Render(fmt.Sprintf("%d M/s", m.currentOps)))
+	return cardStyle.Render(content)
+}
 
-	// CPU Frequency
-	if m.currentStats.CPUFreqMax > 0 {
-		s.WriteString(" │ ")
-		s.WriteString(labelStyle.Render("CPU: "))
-		s.WriteString(valueStyle.Render(fmt.Sprintf("%d MHz (%.0f%%)",
-			m.currentStats.CPUFreqCur, m.currentStats.CPUFreqPct)))
+// getPercentageColor returns color based on percentage value.
+func getPercentageColor(pct float64) string {
+	if pct < 50 {
+		return "#00FF87"
+	} else if pct < 75 {
+		return "#FFD700"
 	}
+	return "#FF6B35"
+}
 
-	// Temperature
-	if m.currentStats.Temperature > 0 {
-		s.WriteString(" │ ")
-		s.WriteString(labelStyle.Render("Temp: "))
-		s.WriteString(valueStyle.Render(fmt.Sprintf("%.1f°C", m.currentStats.Temperature)))
+// getTempColor returns color based on temperature.
+func getTempColor(temp float64) string {
+	if temp < 50 {
+		return "#00FF87"
+	} else if temp < 70 {
+		return "#FFD700"
+	} else if temp < 85 {
+		return "#FF8C00"
 	}
-
-	// Fan speeds
-	if len(m.currentStats.FanRPMs) > 0 {
-		s.WriteString(" │ ")
-		s.WriteString(labelStyle.Render("Fans: "))
-		fanStrs := make([]string, len(m.currentStats.FanRPMs))
-		for i, rpm := range m.currentStats.FanRPMs {
-			fanStrs[i] = fmt.Sprintf("%d", rpm)
-		}
-		s.WriteString(valueStyle.Render(joinStrings(fanStrs, ",")))
-	}
-
-	return s.String()
+	return "#FF0000"
 }
 
 // renderGraphs creates the 2x2 graph panel layout.
@@ -264,21 +366,54 @@ func (m Model) renderGraphs() string {
 
 // renderGraph creates a single graph panel.
 func (m Model) renderGraph(title string, data []float64, minY, maxY float64, height, width int) string {
+	// Determine color based on graph type
+	var borderColor, graphColor string
+	switch {
+	case strings.Contains(title, "Operations"):
+		borderColor = "#FFD700"
+		graphColor = "#FFD700"
+	case strings.Contains(title, "CPU"):
+		borderColor = "#7EC8E3"
+		graphColor = "#00CED1"
+	case strings.Contains(title, "Temperature"):
+		// Dynamic color based on current temp
+		if len(data) > 0 {
+			currentTemp := data[len(data)-1]
+			borderColor = getTempColor(currentTemp)
+			graphColor = getTempColor(currentTemp)
+		} else {
+			borderColor = "#00FF87"
+			graphColor = "#00FF87"
+		}
+	case strings.Contains(title, "Fan"):
+		borderColor = "#98D8C8"
+		graphColor = "#5FD7FF"
+	default:
+		borderColor = "#888888"
+		graphColor = "#FFFFFF"
+	}
+
+	// Fixed width for consistent panel sizing
+	panelWidth := width + 10
 	panelStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("#444444")).
-		Padding(1, 2)
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color(borderColor)).
+		Padding(1, 1).
+		Width(panelWidth).
+		Height(height + 8) // Fixed height for alignment
 
 	labelStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#ffffff"))
+		Foreground(lipgloss.Color(borderColor)).
+		Background(lipgloss.Color("#1a1a1a")).
+		Padding(0, 1)
 
 	graphStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#ffff00"))
+		Foreground(lipgloss.Color(graphColor))
 
 	var g strings.Builder
 	g.WriteString(labelStyle.Render(title))
-	g.WriteString("\n")
+	g.WriteString("\n\n")
 
 	if len(data) > 1 {
 		graph := asciigraph.Plot(data,
@@ -287,8 +422,20 @@ func (m Model) renderGraph(title string, data []float64, minY, maxY float64, hei
 			asciigraph.LowerBound(minY),
 			asciigraph.UpperBound(maxY))
 		g.WriteString(graphStyle.Render(graph))
+
+		// Add current value indicator
+		currentVal := data[len(data)-1]
+		currentStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(graphColor)).
+			Bold(true).
+			MarginTop(1)
+		g.WriteString("\n")
+		g.WriteString(currentStyle.Render(fmt.Sprintf("▶ %.1f", currentVal)))
 	} else {
-		g.WriteString("Waiting for data...")
+		waitStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#666666")).
+			Italic(true)
+		g.WriteString(waitStyle.Render("⏳ Collecting data..."))
 	}
 
 	return panelStyle.Render(g.String())
@@ -296,12 +443,34 @@ func (m Model) renderGraph(title string, data []float64, minY, maxY float64, hei
 
 // renderHelp creates the help text.
 func (m Model) renderHelp() string {
-	style := lipgloss.NewStyle().
-		Faint(true).
-		Foreground(lipgloss.Color("#888888")).
-		Padding(1, 0, 0, 0)
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FF6B35")).
+		Bold(true).
+		Padding(0, 1)
 
-	return style.Render("Controls: [+] increase workers │ [-] decrease workers │ [q] quit")
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888"))
+
+	dividerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#444444"))
+
+	help := lipgloss.JoinHorizontal(lipgloss.Center,
+		keyStyle.Render("+"),
+		descStyle.Render("increase"),
+		dividerStyle.Render(" • "),
+		keyStyle.Render("-"),
+		descStyle.Render("decrease"),
+		dividerStyle.Render(" • "),
+		keyStyle.Render("q"),
+		descStyle.Render("quit"),
+	)
+
+	containerStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#444444")).
+		Padding(0, 1)
+
+	return containerStyle.Render(help)
 }
 
 // calculateGraphDimensions determines optimal graph size based on terminal dimensions.
@@ -310,29 +479,29 @@ func (m Model) calculateGraphDimensions() (height, width int) {
 	width = 50
 
 	if m.width > 0 && m.height > 0 {
-		// Account for UI overhead
-		headerLines := 6      // title, stats, blank, help
-		panelOverhead := 6    // borders and padding per row
-		availableHeight := m.height - headerLines - panelOverhead
+		// Account for UI overhead (header + stats + help + spacing)
+		uiOverhead := 14      // header, stats, help lines + spacing
+		panelBorderHeight := 8 // borders and padding per panel
+		availableHeight := m.height - uiOverhead
 
 		// Divide by 2 for two rows of graphs
-		height = (availableHeight / 2) - 3
-		if height < 8 {
-			height = 8
+		height = (availableHeight / 2) - panelBorderHeight
+		if height < 6 {
+			height = 6
 		}
-		if height > 30 {
-			height = 30
+		if height > 20 {
+			height = 20
 		}
 
 		// Calculate width for two columns
-		panelWidthOverhead := 12
-		availableWidth := m.width - panelWidthOverhead
-		width = (availableWidth / 2) - 6
+		panelBorderWidth := 8  // borders and padding per panel
+		availableWidth := m.width
+		width = (availableWidth / 2) - panelBorderWidth
 		if width < 30 {
 			width = 30
 		}
-		if width > 80 {
-			width = 80
+		if width > 70 {
+			width = 70
 		}
 	}
 
